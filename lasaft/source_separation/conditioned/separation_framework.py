@@ -169,7 +169,7 @@ class Spectrogram_based(Conditional_Source_Separation, metaclass=ABCMeta):
         return loss
 
     def validation_epoch_end(self, outputs: List[Any]) -> None:
-        if self.current_epoch % 20 == 0:
+        if self.current_epoch % 5 == 0:
             for idx in [0]:
                 estimation = {}
                 for target_name in self.target_names:
@@ -265,3 +265,105 @@ class Spectrogram_based(Conditional_Source_Separation, metaclass=ABCMeta):
     @abstractmethod
     def separate(self, input_signal, input_condition) -> torch.Tensor:
         pass
+'''
+import math
+from typing import List, Tuple
+import torch.nn.functional as f
+
+def get_same_padding(x: int, k: int, s: int, d: int):
+    return max((math.ceil(x / s) - 1) * s + (k - 1) * d + 1 - x, 0)
+
+def pad_same(x, k: List[int], s: List[int], d: List[int] = (1, 1), value: float = 0):
+    ih, iw = x.size()[-2:]
+    pad_h, pad_w = get_same_padding(ih, k[0], s[0], d[0]), get_same_padding(iw, k[1], s[1], d[1])
+    if pad_h > 0 or pad_w > 0:
+        x = f.pad(x, [pad_w // 2, pad_w - pad_w // 2, pad_h // 2, pad_h - pad_h // 2], value=value)
+    return x
+
+class Conv2d_pad_lrelu(pl.LightningModule):
+    def __init__(self, in_dim, out_dim, k, s, norm=True):
+        super(Conv2d_pad_lrelu, self).__init__()
+        self.k = k
+        self.s = s
+        self.norm = norm
+        self.conv2d = nn.Conv2d(in_dim, out_dim, kernel_size=k, stride=s)
+        self.bnorm = nn.BatchNorm2d(out_dim)
+        self.act = nn.LeakyReLU(0.2)
+
+    def forward(self, x):
+        y = pad_same(x, list(self.k), list(self.s))
+        y = self.conv2d(y)
+        #if self.norm:
+        #    y = self.bnorm(y)
+        y = self.act(y)
+        return y
+
+class Discriminator(pl.LightningModule):
+    """
+    Input shape: (batch_size, 2, num_frame, hop_length)
+    Output shape: (batch_size, )
+    """
+    def __init__(self, channels, time, freq):
+        self.save_hyperparameters()
+        super(Discriminator, self).__init__()
+
+        dim = 32
+
+        #self.first = Conv2d_pad_lrelu(2, dim, (4,4), (2,2), norm=False)
+        self.first = nn.Sequential(
+            nn.Conv2d(2, dim, (4,4), (2,2)),
+            nn.LeakyReLU(0.2)
+        )
+        self.mid_layers = nn.Sequential(
+            Conv2d_pad_lrelu(32, 64, (4,4), (2,2)),
+            Conv2d_pad_lrelu(64, 128, (4,4), (2,2)),
+            Conv2d_pad_lrelu(128, 256, (4,4), (2,2)),
+            Conv2d_pad_lrelu(256, 512, (4,4), (2,2)),
+            Conv2d_pad_lrelu(512, 512, (2,4), (1,2)),
+            Conv2d_pad_lrelu(512, 512, (2,4), (1,2))
+        )
+        self.last = nn.Conv2d(512, 1, 4, 2)
+
+    def forward(self, x):
+        y = self.first(x)
+        y = self.mid_layers(y)
+        y = self.last(y)
+        y = y.view(-1).unsqueeze(dim=1)
+        return y
+
+class GAN(Spectrogram_based):
+    def __init__(self, n_fft, hop_length, num_frame,
+                 spec_type, spec_est_mode,
+                 conditional_spec2spec,
+                 optimizer, lr, auto_lr_schedule,
+                 train_loss, val_loss
+                 ):
+        super(Spectrogram_based, self).__init__(n_fft, hop_length, num_frame,
+                                                optimizer, lr, auto_lr_schedule)
+
+        self.n_fft = n_fft
+        self.hop_length = hop_length
+        self.num_frame = num_frame
+
+        assert spec_type in ['magnitude', 'complex']
+        assert spec_est_mode in ['masking', 'mapping']
+        self.magnitude_based = spec_type == 'magnitude'
+        self.masking_based = spec_est_mode == 'masking'
+        self.stft = fourier.multi_channeled_STFT(n_fft=n_fft, hop_length=hop_length)
+        self.stft.freeze()
+
+        self.G = conditional_spec2spec
+        self.D = Discriminator(2, num_frame, hop_length) # channels
+        self.valid_estimation_dict = {}
+        self.val_loss = val_loss
+        self.train_loss = train_loss
+
+        self.init_weights()
+
+    def init_weights(self):
+        init_weights_functional(self.spec2spec,
+                                self.spec2spec.activation)
+    def training_step(self, batch, batch_idx, optimizer_idx):
+
+    def configure_optimizers(self):
+'''

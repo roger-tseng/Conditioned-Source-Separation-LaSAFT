@@ -44,7 +44,7 @@ def train(param):
     save_top_k = args['save_top_k']
 
     checkpoint_callback = ModelCheckpoint(
-        filepath=ckpt_path,
+        dirpath=ckpt_path,
         save_top_k=save_top_k,
         verbose=False,
         monitor='val_loss',

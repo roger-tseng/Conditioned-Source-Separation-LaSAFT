@@ -113,7 +113,7 @@ class MusdbEvalSet(MusdbWrapperDataset):
         num_chunks = [math.ceil(length / self.true_samples) for length in self.lengths]
         self.acc_chunk_final_ids = [sum(num_chunks[:i + 1]) for i in range(self.num_tracks)]
 
-        file_name = 'linear_mixture.wav'
+        file_name = 'mixture.wav'
         for i in range(self.num_tracks):
             self.wav_dict[i]['linear_mixture'] = self.wav_dict[i]['vocals'][:-10] + file_name
 
